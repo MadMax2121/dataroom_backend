@@ -1,0 +1,38 @@
+services:
+  # Flask backend
+  api:
+    build: .
+    container_name: backend
+    restart: always
+    environment:
+      - FLASK_APP=app
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/dataroom
+      - SECRET_KEY=dev-secret-key
+      - JWT_SECRET_KEY=dev-jwt-key
+      - UPLOAD_FOLDER=instance/uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app  # Mount the whole directory for development
+    depends_on:
+      - db
+
+  # PostgreSQL
+  db:
+    image: postgres:13-alpine
+    container_name: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=dataroom
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+ 
