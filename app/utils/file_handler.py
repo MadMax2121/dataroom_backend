@@ -5,8 +5,8 @@ from flask import current_app
 
 def allowed_file(filename):
     """Check if a file has an allowed extension"""
-    ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'zip', 'rar', 'png', 'jpg', 'jpeg', 'gif'}
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    # Accept all file types
+    return '.' in filename
 
 def save_file(file):
     """Save a file to disk and return its filename and path"""
@@ -78,7 +78,9 @@ def get_file_type(filename):
         'png': 'image/png',
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
-        'gif': 'image/gif'
+        'gif': 'image/gif',
+        'v': 'text/plain',  # Assume V files are text files
     }
     
+    # Return the known mime type or default to binary stream
     return mime_types.get(ext, 'application/octet-stream') 

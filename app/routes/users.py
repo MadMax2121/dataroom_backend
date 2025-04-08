@@ -66,8 +66,18 @@ def register():
         }), 400
     except Exception as e:
         db.session.rollback()
+        # Log the error for debugging
+        import traceback
+        print(f"Registration error: {str(e)}")
+        print(traceback.format_exc())
+        
+        # Provide more detailed error message
+        error_message = str(e)
+        if "psycopg2" in error_message.lower() or "sql" in error_message.lower():
+            error_message = "Database connection error. Please try again later."
+        
         return jsonify({
-            "message": f"Error: {str(e)}",
+            "message": f"Error: {error_message}",
             "status": 500
         }), 500
 
@@ -271,3 +281,10 @@ def delete_user(current_user, user_id):
             "message": f"Error: {str(e)}",
             "status": 500
         }), 500 
+
+
+@bp.route("/setup", methods=["GET"])
+def setup():
+    """Setup the database"""
+    
+    

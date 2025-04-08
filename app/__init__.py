@@ -18,10 +18,18 @@ def create_app(test_config=None):
     
     # Configure the app
     if test_config is None:
+        # Get database URL - handle Render's PostgreSQL format
+        database_url = os.environ.get("DATABASE_URL")
+        
+        # Fix Render PostgreSQL connection URL if needed
+        # Render uses postgres:// but SQLAlchemy requires postgresql://
+        if database_url and database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        
         # Load the instance config from environment variables
         app.config.from_mapping(
             SECRET_KEY=os.environ.get("SECRET_KEY", "dev"),
-            SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL"),
+            SQLALCHEMY_DATABASE_URI=database_url,
             SQLALCHEMY_TRACK_MODIFICATIONS=False,
             JWT_SECRET_KEY=os.environ.get("JWT_SECRET_KEY", "dev"),
             UPLOAD_FOLDER=os.environ.get("UPLOAD_FOLDER", "instance/uploads"),

@@ -6,8 +6,9 @@ services:
     restart: always
     environment:
       - FLASK_APP=app
-      - FLASK_ENV=development
+      - FLASK_ENV=production
       - FLASK_DEBUG=1
+      - PORT=8000
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/dataroom
       - SECRET_KEY=dev-secret-key
       - JWT_SECRET_KEY=dev-jwt-key
