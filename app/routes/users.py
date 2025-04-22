@@ -2,8 +2,9 @@ from flask import Blueprint, request, jsonify
 from marshmallow import ValidationError
 from app import db
 from app.models.user import User
-from app.schemas import UserSchema, UserUpdateSchema, LoginSchema
+from app.schemas import UserSchema, UserUpdateSchema, LoginSchema, GoogleAuthSchema
 from app.utils.auth import token_required, admin_required, generate_token
+import uuid
 
 bp = Blueprint("users", __name__, url_prefix="/api/users")
 
@@ -12,6 +13,7 @@ user_schema = UserSchema()
 users_schema = UserSchema(many=True)
 user_update_schema = UserUpdateSchema()
 login_schema = LoginSchema()
+google_auth_schema = GoogleAuthSchema()
 
 @bp.route("/register", methods=["POST"])
 def register():
@@ -280,8 +282,108 @@ def delete_user(current_user, user_id):
         return jsonify({
             "message": f"Error: {str(e)}",
             "status": 500
-        }), 500 
+        }), 500
 
+@bp.route("/oauth/google", methods=["POST"])
+def google_auth():
+    """Handle Google OAuth authentication"""
+    try:
+        print("Received Google OAuth request")
+        
+        # Get request data
+        request_data = request.get_json()
+        if not request_data:
+            print("No JSON data received")
+            return jsonify({
+                "message": "No data provided",
+                "status": 400
+            }), 400
+            
+        print(f"Request data: {request_data}")
+        
+        # Validate request data
+        data = google_auth_schema.load(request_data)
+        print(f"Validated data: {data}")
+        
+        # Check if user with this email already exists
+        user = User.query.filter_by(email=data["email"]).first()
+        
+        if user:
+            print(f"Existing user found: {user.id}")
+            # User exists, log them in
+            token = generate_token(user.id)
+            return jsonify({
+                "message": "Login successful",
+                "status": 200,
+                "token": token,
+                "user": user_schema.dump(user)
+            }), 200
+        else:
+            print(f"Creating new user for email: {data['email']}")
+            # Create new user from Google data
+            # Generate a username based on email if not provided
+            username = data.get("name", "").replace(" ", "").lower()
+            if not username or User.query.filter_by(username=username).first():
+                # If username is taken or empty, generate one based on email prefix + random string
+                email_prefix = data["email"].split("@")[0]
+                random_suffix = uuid.uuid4().hex[:6]
+                username = f"{email_prefix}_{random_suffix}"
+            
+            print(f"Generated username: {username}")
+            
+            # Parse name into first and last name if available
+            name_parts = data.get("name", "").split(" ", 1) if data.get("name") else []
+            first_name = name_parts[0] if len(name_parts) > 0 else ""
+            last_name = name_parts[1] if len(name_parts) > 1 else ""
+            
+            # Create user with a random password (user will login via Google)
+            random_password = uuid.uuid4().hex
+            user = User(
+                username=username,
+                email=data["email"],
+                first_name=first_name,
+                last_name=last_name,
+                role="user"
+            )
+            user.password = random_password
+            
+            # Save to database
+            try:
+                db.session.add(user)
+                db.session.commit()
+                print(f"New user created with ID: {user.id}")
+            except Exception as db_error:
+                db.session.rollback()
+                print(f"Database error creating user: {str(db_error)}")
+                raise
+            
+            # Generate token
+            token = generate_token(user.id)
+            
+            return jsonify({
+                "message": "User registered successfully via Google",
+                "status": 201,
+                "token": token,
+                "user": user_schema.dump(user)
+            }), 201
+        
+    except ValidationError as e:
+        print(f"Validation error: {e.messages}")
+        return jsonify({
+            "message": "Validation error",
+            "errors": e.messages,
+            "status": 400
+        }), 400
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        print(f"Google OAuth error: {str(e)}")
+        print(traceback.format_exc())
+        
+        return jsonify({
+            "message": f"Error: {str(e)}",
+            "status": 500
+        }), 500
 
 @bp.route("/setup", methods=["GET"])
 def setup():
