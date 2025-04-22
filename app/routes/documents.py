@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify, current_app, send_file
 from marshmallow import ValidationError
 from werkzeug.utils import secure_filename
 from app import db
-from app.models.document import Document, DocumentTag
+from app.models.document import Document
 from app.schemas import DocumentSchema, DocumentUpdateSchema
 from app.utils.auth import token_required, admin_required
 from app.utils.file_handler import save_file, delete_file, get_file_type
@@ -93,6 +93,17 @@ def create_document(current_user):
         title = request.form.get("title")
         description = request.form.get("description", "")
         tags = request.form.getlist("tags[]") if "tags[]" in request.form else []
+        folder_id = request.form.get("folder_id")
+        
+        # Convert folder_id to int if provided
+        if folder_id:
+            try:
+                folder_id = int(folder_id)
+            except ValueError:
+                return jsonify({
+                    "message": "Invalid folder ID",
+                    "status": 400
+                }), 400
         
         # Validate required fields
         if not title:
@@ -117,18 +128,13 @@ def create_document(current_user):
             file_url=file_url,
             file_type=get_file_type(file.filename),
             file_size=os.path.getsize(file_path),
+            tags=",".join(tags) if tags else None,
+            folder_id=folder_id,
             created_by=current_user.id
         )
         
         # Add to database
         db.session.add(document)
-        db.session.flush()  # Get document ID
-        
-        # Add tags
-        for tag in tags:
-            doc_tag = DocumentTag(document_id=document.id, name=tag)
-            db.session.add(doc_tag)
-            
         db.session.commit()
         
         return jsonify({
@@ -171,16 +177,12 @@ def update_document(current_user, document_id):
             document.title = data["title"]
         if "description" in data:
             document.description = data["description"]
+        if "folder_id" in data:
+            document.folder_id = data["folder_id"]
             
         # Update tags if provided
         if "tags" in data:
-            # Remove existing tags
-            DocumentTag.query.filter_by(document_id=document.id).delete()
-            
-            # Add new tags
-            for tag in data["tags"]:
-                doc_tag = DocumentTag(document_id=document.id, name=tag)
-                db.session.add(doc_tag)
+            document.tags = ",".join(data["tags"]) if data["tags"] else None
                 
         # Save to database
         db.session.commit()
@@ -349,6 +351,7 @@ def search_documents(current_user):
     """Search documents by title, description or tags"""
     # Get search query
     search_term = request.args.get("q", "")
+    
     if not search_term:
         return jsonify({
             "message": "Search query is required",
@@ -363,17 +366,9 @@ def search_documents(current_user):
     search_pattern = f"%{search_term}%"
     query = Document.query.filter(
         Document.title.ilike(search_pattern) | 
-        Document.description.ilike(search_pattern)
+        Document.description.ilike(search_pattern) |
+        Document.tags.ilike(search_pattern)
     )
-    
-    # Get documents that match by tags
-    tag_document_ids = db.session.query(DocumentTag.document_id).filter(
-        DocumentTag.name.ilike(search_pattern)
-    ).all()
-    tag_document_ids = [id[0] for id in tag_document_ids]
-    
-    if tag_document_ids:
-        query = query.union(Document.query.filter(Document.id.in_(tag_document_ids)))
     
     # Get paginated documents
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)

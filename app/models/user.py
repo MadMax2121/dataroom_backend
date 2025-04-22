@@ -17,6 +17,9 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # OAuth related fields
+    oauth_google_id = db.Column(db.String(100), nullable=True, unique=True)
+    
     # Relationships
     documents = db.relationship("Document", back_populates="creator", cascade="all, delete-orphan")
     folders = db.relationship("Folder", back_populates="creator", cascade="all, delete-orphan")
@@ -46,6 +49,7 @@ class User(db.Model):
             "role": self.role,
             "createdAt": self.created_at.isoformat(),
             "updatedAt": self.updated_at.isoformat(),
+            "hasOauthProvider": bool(self.oauth_google_id)
         }
     
     def __repr__(self):

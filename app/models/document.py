@@ -13,13 +13,15 @@ class Document(db.Model):
     file_url = db.Column(db.String(255), nullable=False)
     file_type = db.Column(db.String(100), nullable=False)
     file_size = db.Column(db.Integer, nullable=False)  # Size in bytes
+    tags = db.Column(db.String(255), nullable=True)  # Comma-separated tags
+    folder_id = db.Column(db.Integer, db.ForeignKey("folders.id"), nullable=True)  # Nullable for documents not in any folder
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     
     # Relationships
     creator = db.relationship("User", back_populates="documents")
-    tags = db.relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
+    folder = db.relationship("Folder", back_populates="documents")
     
     def to_dict(self):
         """Return a dict representation of the document"""
@@ -30,26 +32,13 @@ class Document(db.Model):
             "fileUrl": self.file_url,
             "fileType": self.file_type,
             "fileSize": self.file_size,
-            "tags": [tag.name for tag in self.tags],
+            "tags": self.tags.split(",") if self.tags else [],
+            "folderId": self.folder_id,
             "createdAt": self.created_at.isoformat(),
             "updatedAt": self.updated_at.isoformat(),
-            "createdBy": self.created_by
+            "createdBy": self.created_by,
+            "folder_id": self.folder_id  # Added explicit folder_id field
         }
     
     def __repr__(self):
-        return f"<Document {self.title}>"
-
-
-class DocumentTag(db.Model):
-    """Document tag model"""
-    
-    __tablename__ = "document_tags"
-    
-    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), primary_key=True)
-    name = db.Column(db.String(50), primary_key=True)
-    
-    # Relationships
-    document = db.relationship("Document", back_populates="tags")
-    
-    def __repr__(self):
-        return f"<DocumentTag {self.name}>" 
+        return f"<Document {self.title}>" 

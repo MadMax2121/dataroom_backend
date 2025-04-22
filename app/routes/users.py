@@ -4,6 +4,7 @@ from app import db
 from app.models.user import User
 from app.schemas import UserSchema, UserUpdateSchema, LoginSchema
 from app.utils.auth import token_required, admin_required, generate_token
+import uuid
 
 bp = Blueprint("users", __name__, url_prefix="/api/users")
 
@@ -280,8 +281,76 @@ def delete_user(current_user, user_id):
         return jsonify({
             "message": f"Error: {str(e)}",
             "status": 500
-        }), 500 
+        }), 500
 
+@bp.route("/oauth/google", methods=["POST"])
+def oauth_google():
+    """Handle Google OAuth authentication"""
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get("email"):
+            return jsonify({
+                "message": "Missing required fields",
+                "status": 400
+            }), 400
+            
+        email = data.get("email")
+        name = data.get("name", "")
+        google_id = data.get("googleId")
+        
+        # Check if user already exists
+        user = User.query.filter_by(email=email).first()
+        
+        if user:
+            # User exists, update Google ID if needed
+            if google_id and not user.oauth_google_id:
+                user.oauth_google_id = google_id
+                db.session.commit()
+        else:
+            # Create new user
+            # Split name into first_name and last_name if possible
+            name_parts = name.split(" ", 1)
+            first_name = name_parts[0] if name_parts else ""
+            last_name = name_parts[1] if len(name_parts) > 1 else ""
+            
+            # Generate a random password since it won't be used for OAuth users
+            random_password = uuid.uuid4().hex
+            
+            user = User(
+                username=email.split("@")[0],  # Use email prefix as username
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                role="user",
+                oauth_google_id=google_id
+            )
+            user.password = random_password
+            
+            db.session.add(user)
+            db.session.commit()
+            
+        # Generate token
+        token = generate_token(user.id)
+        
+        return jsonify({
+            "message": "Google authentication successful",
+            "status": 200,
+            "token": token,
+            "user": user_schema.dump(user)
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        # Log the error for debugging
+        import traceback
+        print(f"Google OAuth error: {str(e)}")
+        print(traceback.format_exc())
+        
+        return jsonify({
+            "message": f"Error: {str(e)}",
+            "status": 500
+        }), 500
 
 @bp.route("/setup", methods=["GET"])
 def setup():

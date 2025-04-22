@@ -1,15 +1,16 @@
 from flask import Blueprint, request, jsonify
 from marshmallow import ValidationError
 from app import db
-from app.models.folder import Folder, FolderDocument, FolderPermission
+from app.models.folder import Folder
 from app.models.document import Document
 from app.schemas import FolderSchema, FolderUpdateSchema, DocumentSchema
 from app.utils.auth import token_required, admin_required
 from sqlalchemy import or_
+import traceback
 
 bp = Blueprint("folders", __name__, url_prefix="/api/folders")
 
-# Schemas
+# Schema instances
 folder_schema = FolderSchema()
 folders_schema = FolderSchema(many=True)
 folder_update_schema = FolderUpdateSchema()
@@ -26,29 +27,20 @@ def has_folder_permission(user, folder):
     if folder.created_by == user.id:
         return True
     
-    # Check shared permissions
-    permission = FolderPermission.query.filter_by(
-        folder_id=folder.id,
-        user_id=user.id
-    ).first()
-    
-    return permission is not None
+    # For simplified permissions, only owner and admin have access
+    return False
 
 @bp.route("", methods=["GET"])
 @token_required
 def get_folders(current_user):
     """Get all folders for the current user"""
-    # Get folders with permission: owned or shared
-    folders = Folder.query.filter(
-        or_(
-            Folder.created_by == current_user.id,
-            Folder.id.in_(
-                db.session.query(FolderPermission.folder_id)
-                .filter_by(user_id=current_user.id)
-                .subquery()
-            )
-        )
-    ).all()
+    # Get folders owned by current user
+    if current_user.role == "admin":
+        # Admins can see all folders
+        folders = Folder.query.all()
+    else:
+        # Regular users only see their own folders
+        folders = Folder.query.filter_by(created_by=current_user.id).all()
     
     return jsonify({
         "message": "Folders retrieved successfully",
@@ -59,16 +51,15 @@ def get_folders(current_user):
 @bp.route("/<int:folder_id>", methods=["GET"])
 @token_required
 def get_folder(current_user, folder_id):
-    """Get a folder by ID"""
+    """Get a specific folder"""
     folder = Folder.query.get(folder_id)
     if not folder:
         return jsonify({
             "message": "Folder not found",
             "status": 404
         }), 404
-    
-    # Check if the user owns the folder or is an admin
-    if current_user.role != "admin" and folder.created_by != current_user.id:
+        
+    if not has_folder_permission(current_user, folder):
         return jsonify({
             "message": "Not authorized to access this folder",
             "status": 403
@@ -129,7 +120,6 @@ def update_folder(current_user, folder_id):
             "status": 404
         }), 404
         
-    # Check if the user owns the folder or is an admin
     if current_user.role != "admin" and folder.created_by != current_user.id:
         return jsonify({
             "message": "Not authorized to update this folder",
@@ -145,7 +135,7 @@ def update_folder(current_user, folder_id):
             folder.name = data["name"]
         if "type" in data:
             folder.type = data["type"]
-                
+            
         # Save to database
         db.session.commit()
         
@@ -179,7 +169,6 @@ def delete_folder(current_user, folder_id):
             "status": 404
         }), 404
         
-    # Check if the user owns the folder or is an admin
     if current_user.role != "admin" and folder.created_by != current_user.id:
         return jsonify({
             "message": "Not authorized to delete this folder",
@@ -187,7 +176,7 @@ def delete_folder(current_user, folder_id):
         }), 403
         
     try:
-        # Delete folder from database
+        # Delete folder
         db.session.delete(folder)
         db.session.commit()
         
@@ -208,26 +197,31 @@ def delete_folder(current_user, folder_id):
 @token_required
 def get_folder_documents(current_user, folder_id):
     """Get all documents in a folder"""
+    # Check if folder exists
     folder = Folder.query.get(folder_id)
     if not folder:
         return jsonify({
             "message": "Folder not found",
             "status": 404
         }), 404
-    
-    # Check if user has permission to access this folder
-    if not has_folder_permission(current_user, folder):
+        
+    # Check if the user owns the folder or is an admin
+    if current_user.role != "admin" and folder.created_by != current_user.id:
         return jsonify({
             "message": "Not authorized to access this folder",
             "status": 403
         }), 403
     
-    documents = Document.query.join(FolderDocument).filter(FolderDocument.folder_id == folder_id).all()
+    # Get documents directly from folder relationship
+    documents = folder.documents
     
     return jsonify({
-        "message": "Folder documents retrieved successfully",
+        "message": "Documents retrieved successfully",
         "status": 200,
-        "documents": documents_schema.dump(documents)
+        "data": {
+            "documents": documents_schema.dump(documents),
+            "total": len(documents)
+        }
     }), 200
 
 @bp.route("/<int:folder_id>/documents", methods=["POST"])
@@ -264,25 +258,16 @@ def add_document_to_folder(current_user, folder_id):
             "status": 404
         }), 404
     
-    # Check if document already in this folder
-    existing = FolderDocument.query.filter_by(
-        folder_id=folder_id, 
-        document_id=document_id
-    ).first()
-    
-    if existing:
+    # Check if document already in this folder using the new folder_id field
+    if document.folder_id == folder_id:
         return jsonify({
             "message": "Document already in this folder",
             "status": 400
         }), 400
     
     try:
-        # Add document to folder
-        folder_document = FolderDocument(
-            folder_id=folder_id,
-            document_id=document_id
-        )
-        db.session.add(folder_document)
+        # Set document's folder_id
+        document.folder_id = folder_id
         db.session.commit()
         
         return jsonify({
@@ -296,6 +281,8 @@ def add_document_to_folder(current_user, folder_id):
         
     except Exception as e:
         db.session.rollback()
+        print(f"Error: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({
             "message": f"Error: {str(e)}",
             "status": 500
@@ -319,21 +306,17 @@ def remove_document_from_folder(current_user, folder_id, document_id):
             "status": 403
         }), 403
     
-    # Check if document exists in this folder
-    folder_document = FolderDocument.query.filter_by(
-        folder_id=folder_id, 
-        document_id=document_id
-    ).first()
-    
-    if not folder_document:
+    # Check if document exists and is in this folder
+    document = Document.query.get(document_id)
+    if not document or document.folder_id != folder_id:
         return jsonify({
             "message": "Document not found in this folder",
             "status": 404
         }), 404
     
     try:
-        # Remove document from folder
-        db.session.delete(folder_document)
+        # Remove document from folder by setting folder_id to None
+        document.folder_id = None
         db.session.commit()
         
         return jsonify({
