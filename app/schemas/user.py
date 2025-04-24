@@ -23,4 +23,11 @@ class UserUpdateSchema(Schema):
 class LoginSchema(Schema):
     """Schema for login validation"""
     email = fields.Email(required=True)
-    password = fields.Str(required=True, validate=validate.Length(min=6)) 
+    password = fields.Str(required=True, validate=validate.Length(min=6))
+
+class GoogleAuthSchema(Schema):
+    """Schema for Google OAuth data validation"""
+    email = fields.Email(required=True)
+    name = fields.Str(required=False, allow_none=True, missing="")
+    picture = fields.Str(required=False, allow_none=True, missing="")
+    sub = fields.Str(required=False, allow_none=True, missing="") 
