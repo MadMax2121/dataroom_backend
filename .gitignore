@@ -31,8 +31,6 @@ ENV/
 env/
 
 # Flask
-instance/uploads/*
-!instance/uploads/.gitkeep
 migrations/versions/*
 !migrations/versions/.gitkeep
 
