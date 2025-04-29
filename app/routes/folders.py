@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from marshmallow import ValidationError
 from app import db
-from app.models.folder import Folder, FolderDocument, FolderPermission
+from app.models.folder import Folder, FolderPermission
 from app.models.document import Document
 from app.schemas import FolderSchema, FolderUpdateSchema, DocumentSchema
 from app.utils.auth import token_required, admin_required
@@ -14,19 +14,20 @@ folder_schema = FolderSchema()
 folders_schema = FolderSchema(many=True)
 folder_update_schema = FolderUpdateSchema()
 documents_schema = DocumentSchema(many=True)
+document_schema = DocumentSchema()
 
 # Helper functions
 def has_folder_permission(user, folder):
     """Check if user has permission to access a folder"""
-    # Admin has access to all folders
-    if user.role == "admin":
-        return True
-    
-    # Owner has access
+    # Allow folder owner
     if folder.created_by == user.id:
         return True
     
-    # Check shared permissions
+    # Allow admins
+    if user.role == "admin":
+        return True
+    
+    # Allow users with explicit permissions
     permission = FolderPermission.query.filter_by(
         folder_id=folder.id,
         user_id=user.id
@@ -222,7 +223,8 @@ def get_folder_documents(current_user, folder_id):
             "status": 403
         }), 403
     
-    documents = Document.query.join(FolderDocument).filter(FolderDocument.folder_id == folder_id).all()
+    # Get documents directly through the relationship
+    documents = Document.query.filter_by(folder_id=folder_id).all()
     
     return jsonify({
         "message": "Folder documents retrieved successfully",
@@ -264,41 +266,57 @@ def add_document_to_folder(current_user, folder_id):
             "status": 404
         }), 404
     
-    # Check if document already in this folder
-    existing = FolderDocument.query.filter_by(
-        folder_id=folder_id, 
-        document_id=document_id
-    ).first()
-    
-    if existing:
+    # Check if document already in a folder
+    if document.folder_id == folder_id:
         return jsonify({
             "message": "Document already in this folder",
             "status": 400
         }), 400
     
     try:
-        # Add document to folder
-        folder_document = FolderDocument(
-            folder_id=folder_id,
-            document_id=document_id
-        )
-        db.session.add(folder_document)
+        # Store the original timestamps before any changes
+        original_updated_at = document.updated_at
+        original_created_at = document.created_at
+        
+        # Get current folder_id to detect document duplication
+        previous_folder_id = document.folder_id
+        
+        # Update folder_id directly
+        document.folder_id = folder_id 
+        
+        # Apply the changes
         db.session.commit()
+        
+        # Now restore the timestamps manually
+        document.updated_at = original_updated_at
+        document.created_at = original_created_at
+        db.session.commit()
+        
+        # Get the updated document 
+        updated_document = Document.query.get(document_id)
         
         return jsonify({
             "message": "Document added to folder successfully",
             "status": 200,
             "data": {
                 "folderId": folder_id,
-                "documentId": document_id
+                "documentId": document_id,
+                "previousFolderId": previous_folder_id,
+                "document": document_schema.dump(updated_document)
             }
         }), 200
         
     except Exception as e:
         db.session.rollback()
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error in add_document_to_folder: {str(e)}")
+        print(f"Traceback: {error_details}")
+        
         return jsonify({
             "message": f"Error: {str(e)}",
-            "status": 500
+            "status": 500,
+            "details": error_details
         }), 500
 
 @bp.route("/<int:folder_id>/documents/<int:document_id>", methods=["DELETE"])
@@ -320,20 +338,25 @@ def remove_document_from_folder(current_user, folder_id, document_id):
         }), 403
     
     # Check if document exists in this folder
-    folder_document = FolderDocument.query.filter_by(
-        folder_id=folder_id, 
-        document_id=document_id
+    document = Document.query.filter_by(
+        id=document_id, 
+        folder_id=folder_id
     ).first()
     
-    if not folder_document:
+    if not document:
         return jsonify({
             "message": "Document not found in this folder",
             "status": 404
         }), 404
     
     try:
-        # Remove document from folder
-        db.session.delete(folder_document)
+        # Use raw SQL to update only the folder_id without changing updated_at
+        sql = """
+        UPDATE documents 
+        SET folder_id = NULL 
+        WHERE id = :document_id
+        """
+        db.session.execute(sql, {"document_id": document_id})
         db.session.commit()
         
         return jsonify({

@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify, current_app, send_file
 from marshmallow import ValidationError
 from werkzeug.utils import secure_filename
 from app import db
-from app.models.document import Document, DocumentTag
+from app.models.document import Document
 from app.schemas import DocumentSchema, DocumentUpdateSchema
 from app.utils.auth import token_required, admin_required
 from app.utils.file_handler import save_file, delete_file, get_file_type
@@ -92,7 +92,36 @@ def create_document(current_user):
         # Get form data
         title = request.form.get("title")
         description = request.form.get("description", "")
-        tags = request.form.getlist("tags[]") if "tags[]" in request.form else []
+        
+        # Extract tags from form data
+        tags = []
+        print("Form data:", list(request.form.items()))
+        
+        # Look for both formats: tags[] and tags[0], tags[1], etc.
+        if "tags[]" in request.form:
+            tags = request.form.getlist("tags[]")
+            print("Found tags[] format:", tags)
+        else:
+            # Check for indexed tags (tags[0], tags[1], etc.)
+            tag_keys = [k for k in request.form.keys() if k.startswith('tags[') and k.endswith(']')]
+            if tag_keys:
+                # Sort by index to preserve order
+                tag_keys.sort(key=lambda k: int(k.replace('tags[', '').replace(']', '')))
+                tags = [request.form[k] for k in tag_keys]
+                print("Found indexed tags format:", tags)
+                
+        # Also check for tags as a JSON array
+        if not tags and request.form.get("tags"):
+            try:
+                import json
+                tags = json.loads(request.form.get("tags"))
+                print("Found JSON tags format:", tags)
+            except:
+                pass
+                
+        print("Final tags to save:", tags)
+        
+        folder_id = request.form.get("folder_id")
         
         # Validate required fields
         if not title:
@@ -109,7 +138,7 @@ def create_document(current_user):
                 "status": 400
             }), 400
             
-        # Create new document
+        # Create new document with tags directly in the model
         document = Document(
             title=title,
             description=description,
@@ -117,19 +146,16 @@ def create_document(current_user):
             file_url=file_url,
             file_type=get_file_type(file.filename),
             file_size=os.path.getsize(file_path),
+            tags=tags,  # Store tags directly in the document
+            folder_id=folder_id if folder_id else None,
             created_by=current_user.id
         )
         
         # Add to database
         db.session.add(document)
-        db.session.flush()  # Get document ID
-        
-        # Add tags
-        for tag in tags:
-            doc_tag = DocumentTag(document_id=document.id, name=tag)
-            db.session.add(doc_tag)
-            
         db.session.commit()
+        
+        print("Document saved with tags:", document.tags)
         
         return jsonify({
             "message": "Document created successfully",
@@ -139,6 +165,8 @@ def create_document(current_user):
         
     except Exception as e:
         db.session.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "message": f"Error: {str(e)}",
             "status": 500
@@ -172,15 +200,11 @@ def update_document(current_user, document_id):
         if "description" in data:
             document.description = data["description"]
             
-        # Update tags if provided
+        # Update tags if provided - directly in document model
         if "tags" in data:
-            # Remove existing tags
-            DocumentTag.query.filter_by(document_id=document.id).delete()
-            
-            # Add new tags
-            for tag in data["tags"]:
-                doc_tag = DocumentTag(document_id=document.id, name=tag)
-                db.session.add(doc_tag)
+            print("Updating tags:", data["tags"])
+            document.tags = data["tags"]
+            print("Tags after update:", document.tags)
                 
         # Save to database
         db.session.commit()
@@ -199,6 +223,8 @@ def update_document(current_user, document_id):
         }), 400
     except Exception as e:
         db.session.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "message": f"Error: {str(e)}",
             "status": 500
@@ -311,12 +337,23 @@ def download_document(current_user, document_id):
         print(f"File size: {os.path.getsize(abs_file_path)}")
         print(f"File mimetype: {document.file_type}")
         
+        # Check if a custom filename was provided in the request
+        custom_filename = request.args.get('filename')
+        if custom_filename:
+            # Use the exact filename provided in the request without sanitizing
+            download_name = custom_filename
+            print(f"Using custom filename from request: {download_name}")
+        else:
+            # If no custom filename, use the document title with secure_filename
+            download_name = secure_filename(document.title)
+            print(f"Using document title as filename: {download_name}")
+        
         # Use explicit attachment_filename to avoid compatibility issues
         try:
             response = send_file(
                 abs_file_path, 
                 mimetype=document.file_type,
-                download_name=secure_filename(document.title),
+                download_name=download_name,
                 as_attachment=True
             )
             
@@ -367,8 +404,8 @@ def search_documents(current_user):
     )
     
     # Get documents that match by tags
-    tag_document_ids = db.session.query(DocumentTag.document_id).filter(
-        DocumentTag.name.ilike(search_pattern)
+    tag_document_ids = db.session.query(Document.id).filter(
+        Document.tags.ilike(search_pattern)
     ).all()
     tag_document_ids = [id[0] for id in tag_document_ids]
     
